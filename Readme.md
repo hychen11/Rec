@@ -418,9 +418,9 @@ Triplet logistic loss:
 
 一条数据包含：
 
-- 一个用户，特征向量记作 \bold{a}
-- 一个正样本，特征向量记作 \bold{b}^+
-- 多个负样本，特征向量记作 \bold{b}^-_1,...,\bold{b}^-_n
+- 一个用户，特征向量记作 $\bold{a}$
+- 一个正样本，特征向量记作$\bold{b}^+$
+- 多个负样本，特征向量记作$\bold{b}^-_1,...,\bold{b}^-_n$
 
 鼓励$\cos{(\bold{a},\bold{b}^+)}$ 尽量大
 
@@ -449,7 +449,7 @@ Triplet logistic loss:
 
 这种模型通常用于排序，在几千个候选物品中选出几百个
 
-以后看到这种模型就要意识到 —— 这是排序模型，不是召回模型
+以后看到这种模型就要意识到 —— **这是排序模型，不是召回模型**
 
 #### 双塔模型：正负样本
 
@@ -494,4 +494,239 @@ Triplet logistic loss:
 - 全量更新 & 增量更新 相结合
 - 每隔几十分钟，发布最新的用户 ID Embedding，供用户塔在线上计算用户向量
 
+### 总结
+
+双塔就是user embedding, item embedding -> get similarity score (cosine similarity)，计算相关度用在召回retrieval
+
+如果直接concat 用在排序！
+
 # 排序
+
+对于每篇笔记，系统记录： 
+
+- 曝光次数（number of impressions）
+
+- 点击次数（number of clicks）
+
+- 点赞次数（number of likes）
+
+- 收藏次数（number of collects）
+
+- 转发次数（number of shares）
+
+ CTR click through rate 点击率 = 点击次数 / 曝光次数 
+
+ like rate 点赞率 = 点赞次数 / 点击次数 
+
+ 收藏率 = 收藏次数 / 点击次数 
+
+ 转发率 = 转发次数 / 点击次数 
+
+ 排序的依据 
+
+- 排序模型预估点击率、点赞率、收藏率、转发率等多种分数
+
+- 融合这些预估分数（比如加权和）
+
+- 根据融合的分数做排序、截断
+
+### 多目标模型
+
+<img src="https://cdn.nlark.com/yuque/0/2023/png/101969/1676618649405-def02245-e0c8-4473-a983-8550479d93b8.png?x-oss-process=image%2Fformat%2Cwebp" alt="image.png" style="zoom:50%;" />
+
+- 统计特征包括"用户统计特征"和"物品统计特征"
+- "场景特征" 是随着用户请求传过来的
+
+P(行为| 用户特征, 物品特征, 上下文特征) 是条件概率预测问题
+
+<img src="https://cdn.nlark.com/yuque/0/2023/png/101969/1676618662752-9c5335a7-b738-48c8-bb32-140d9d0448e6.png?x-oss-process=image%2Fformat%2Cwebp" alt="image.png" style="zoom:50%;" />
+
+Cross Entropy 让预估值接近真实目标值
+
+困难：类别不平衡，即正样本数量显著少于负样本 
+
+> 如果直接用所有样本训练，模型可能只学会预测“负样本”，就能达到很低的 loss（但没用）。
+>
+> 举例：如果点击率 1%，模型学会永远输出 0（预测无点击），表面上准确率 99%，但实际没有价值。
+
+- 每 100 次曝光，约有 10 次点击、90 次无点击
+
+- 每 100 次点击，约有 10 次收藏、90 次无收藏
+
+-  注：不是小红书的真实数据
+
+ 解决方案：负样本降采样（down-sampling） 
+
+- 保留一小部分负样本
+
+- 让正负样本数量平衡，节约计算量
+
+### 预估值校准
+
+做了降采样后训练出的预估点击率会大于真实点击率。
+
+-  正样本、负样本数量为  和 
+
+-  对负样本做降采样，抛弃一部分负样本 
+
+-  使用  个负样本， 是采样率 
+
+-  由于负样本变少，预估点击率大于真实点击率 
+
+### Multi-gate Mixture-of-Experts (MMoE)
+
+- 三个神经网络结构相同，但是不共享参数 （不同角度提取特征的专门子网络）
+
+- 专家神经网络的数量是超参数，实践中通常用 4 个或 8 个
+
+<img src="https://cdn.nlark.com/yuque/0/2023/png/101969/1676618711411-50a618c0-3c1c-4db9-ac4b-e8a6f16d3bb8.png?x-oss-process=image%2Fformat%2Cwebp" alt="image.png" style="zoom:50%;" />
+
+<img src="https://cdn.nlark.com/yuque/0/2023/png/101969/1676618720917-0f12535c-3e71-41bb-840c-3dc17bab68b6.png?x-oss-process=image%2Fformat%2Cwebp" alt="image.png" style="zoom:50%;" />
+
+### 极化现象（Polarization）
+
+专家神经网络在实践中的问题。
+
+<img src="https://cdn.nlark.com/yuque/0/2023/png/101969/1676618730710-ae5e53f7-23ed-443e-ad2d-cc3e8fa8d90b.png?x-oss-process=image%2Fformat%2Cwebp" alt="image.png" style="zoom:50%;" />
+
+解决极化问题 
+
+-  如果有 n 个“专家”，那么每个 softmax 的输入和输出都是 n 维向量 
+
+-  在训练时，对 softmax 的输出使用 **dropout** 
+
+-  Softmax 输出的 n 个数值被 mask 的概率都是 10% 
+
+-  每个“专家”被随机丢弃的概率都是 10% 
+  - 由于每个“专家”都可能被丢弃，神经网络就会尽量避免极化的发生
+
+### 预估分数的融合
+
+略，有具体的融合公式
+
+### 视频
+
+图文笔记排序的主要依据：点击、点赞、收藏、转发、评论...... 
+
+视频排序的依据还有播放时长和完播 
+
+- 对于视频来说，播放时长与完播的重要性大于点击
+- 回归拟合播放时长效果不好，YouTube 的时长建模？
+
+### 精排 vs 粗排
+
+**前期融合**：先对所有特征做 concatenation，再输入神经网络 
+
+- 这个网络叫 shared bottom，意思是它被多个任务共享
+
+-  线上推理代价大：如果有 n 篇候选笔记，整个大模型要做 n 次推理 
+
+双塔模型（一种粗排模型）
+
+-  **后期融合**：把用户、物品特征分别输入不同的神经网络，不对用户、物品特征做融合 
+
+-  线上计算量小： 
+
+  - 用户塔只需要做一次线上推理，计算用户表征 a
+
+  - 物品表征 b 事先储存在向量数据库中，物品塔在线上不做推理
+
+-  后期融合模型不如前期融合模型准确 
+
+  - 预估准确性不如精排模型
+
+  - 后期融合模型用于召回，前期融合模型用于精排
+
+小红书粗排用的三塔模型，效果介于双塔和精排之间
+
+- 三塔模型在塔输出的位置做融合
+
+<img src="https://cdn.nlark.com/yuque/0/2023/png/101969/1676618916372-f4b65f45-5835-4d74-aac4-3aa3bf9e90cb.png?x-oss-process=image%2Fformat%2Cwebp" alt="image.png" style="zoom:50%;" />
+
+<img src="https://cdn.nlark.com/yuque/0/2023/png/101969/1676618928907-7798d9a8-8c26-4183-b07f-29d4334fc526.png?x-oss-process=image%2Fformat%2Cwebp" alt="image.png" style="zoom:50%;" />
+
+#### 双塔（Two-Tower）复盘
+
+- 用户塔 → 输出 user embedding
+- 物品塔 → 输出 item embedding
+- 相似度计算 → dot/cosine → 得分
+
+如果只做 **向量相似度**：
+
+- 用户 embedding 可以缓存
+- 物品 embedding 也可以缓存
+- 计算量很低
+
+**缺点**：
+
+- 只能做简单的 embedding 匹配
+- 想加入复杂交叉特征（比如用户最近行为与物品标签交互、统计特征等）时：
+  - 双塔没办法提前算好，需要对每个 user-item pair 全量做一次额外计算
+  - 这部分计算量在粗排阶段很大
+
+#### 三塔（Three-Tower）的思路
+
+**下层**（**缓存可复用**）
+
+- 用户塔 → user embedding
+- 物品塔 → item embedding
+
+**上层**（每个候选做一次）
+
+- 交叉塔 → user embedding + item embedding + 交叉特征 → 得分
+
+### 
+
+双塔原本设计是 **用户 embedding × 物品 embedding → dot/cosine**
+
+如果你想加 **复杂交叉特征**（比如用户历史行为和物品属性的组合特征）：
+
+- 交叉特征需要依赖 **原始特征和 embedding**
+- **embedding 是基于原始特征生成的**，而双塔没设计缓存交叉特征的机制
+- 所以每个 user-item pair 都要重新生成 embedding + 计算交叉 → **重复计算量大**
+
+三塔把 embedding 生成拆成 **下层 embedding + 上层交叉塔**
+
+**下层 embedding**：
+
+- 用户塔 embedding：每个用户算一次
+- 物品塔 embedding：大部分热门物品可以缓存
+
+**上层交叉塔**：
+
+- 直接拿下层 embedding + 交叉特征做轻量 concat → 打分
+- 不必重新生成 embedding → 节省大量重复计算
+
+# 损失函数
+
+MSE Mean Squared Error
+
+用于回归任务，衡量预测值和真实值之间的距离，让预测数值接近真实数值
+
+Cross Entropy 衡量两个分布的差异，分类？
+
+真实标签是分布 $p$，模型预测是分布 $q$
+
+$H(p,q)=−∑_ip(i)logq(i)$
+
+真实标签y，预测$\hat{y}$
+
+# Dropout
+
+### 防止过拟合
+
+随机丢弃神经元，让网络不依赖某些特定特征。
+
+每次训练都是 **子网络训练**，相当于训练了很多不同的网络，然后在测试时集成它们的效果。
+
+类似 ensemble 的效果，但只需训练一次。
+
+### 减少神经元间共适应（co-adaptation）
+
+某些神经元可能互相依赖，导致网络容易过拟合训练数据。
+
+Dropout 打破了这种依赖，促使神经元学习**更鲁棒、独立的特征**。
+
+### 提高泛化能力
+
+由于网络在每次迭代都面对随机子网络，训练出的特征更具泛化性，对测试集更稳健。
