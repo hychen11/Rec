@@ -1,5 +1,7 @@
 https://www.yuque.com/yuejiangliu/recommended-system-in-the-industry/overview
 
+https://zhuanlan.zhihu.com/p/678664853
+
 # 概要
 
 - 北极星指标 —— 衡量推荐系统好坏 —— 在小红书考虑下面 3 个
@@ -696,6 +698,355 @@ Cross Entropy 让预估值接近真实目标值
 
 - 直接拿下层 embedding + 交叉特征做轻量 concat → 打分
 - 不必重新生成 embedding → 节省大量重复计算
+
+# 特征交叉 20250925
+
+### Factorized Machine (FM)
+
+#### 线性模型
+
+d个特征，模型d+1参数，其中1是b，bias，w有d个
+
+#### 二阶交叉特征 
+
+d个特征，线性+二阶交叉特征，参数个数O(d^2)
+
+d 较大时，参数数量过多，且容易出现过拟合
+
+![img](https://cdn.nlark.com/yuque/0/2023/png/101969/1679752459587-7b4a12da-8461-47e1-ab0c-e06f58a0a5c6.png?x-oss-process=image%2Fformat%2Cwebp)
+
+k<<d，是一个超参数
+
+Factorized Machine (FM): p=b+wx+vivj xixj
+
+参数有 O(kd)个，k<<d
+
+### 深度交叉网络（DCN）
+
+具体看视视频，很详细
+https://www.bilibili.com/video/BV1HZ421U77y/?spm_id_from=333.337.search-card.all.click&vd_source=a497e92c59f6f0157246d6c709696d67
+
+截止 4:40
+
+# 行为序列
+
+### LastN
+
+- LastN：用户最近的 n 次交互（点击、点赞等）的物品 ID
+- 对 LastN 物品 ID 做 embedding，得到 n 个向量
+- 把 n 个向量取平均，作为用户的一种特征
+- 适用于召回双塔模型、粗排三塔模型、精排模型
+
+![img](https://cdn.nlark.com/yuque/0/2023/png/101969/1679753954578-fc96d58f-14a5-4179-ab1e-ec2ddaac4c49.png?x-oss-process=image%2Fformat%2Cwebp)
+
+
+
+![img](https://cdn.nlark.com/yuque/0/2023/png/101969/1679753954649-b8090a01-253b-4275-a978-3ae9a31b6d2c.png?x-oss-process=image%2Fformat%2Cwebp)
+
+- 上面得到的多个向量拼接起来，作为一种用户特征，传到召回或排序模型中
+- Embedding 不只有物品 ID，还会有物品类别等特征
+
+### DIN模型
+
+- DIN 用加权平均代替平均，即注意力机制（attention）
+- 权重：候选物品与用户 LastN 物品的相似度
+
+![img](https://cdn.nlark.com/yuque/0/2023/png/101969/1679753954914-c845a9cc-e374-45bf-bc56-1bf42cf32fb9.png?x-oss-process=image%2Fformat%2Cwebp)
+
+- 候选物品：例如粗排选出了 500 个物品，那这 500 个就是精排的候选物品
+
+- 计算相似度的方法很多，如 内积 和 余弦相似度 等
+
+- DIN 模型总结
+
+  - 对于某候选物品，计算它与用户 LastN 物品的相似度
+
+  - 以相似度为权重，求用户 LastN 物品向量的加权和，结果是一个向量
+
+  - 把得到的向量作为一种用户特征，输入排序模型，预估（用户，候选物品）的点击率、点赞率等指标
+
+  - 本质是注意力机制（attention）
+
+![img](https://cdn.nlark.com/yuque/0/2023/png/101969/1679753954996-a4601b80-3ded-46fb-8a0b-91694c16780d.png?x-oss-process=image%2Fformat%2Cwebp)
+
+简单平均 vs. 注意力机制
+
+- 简单平均 和 注意力机制 都适用于精排模型
+
+- 简单平均适用于双塔模型、三塔模型
+
+  - 简单平均只需要用到 LastN，属于用户自身的特征，与候选物品无关
+
+  - 把 LastN 向量的平均作为用户塔的输入
+
+- 注意力机制不适用于双塔模型、三塔模型
+
+  - 注意力机制 需要用到 LastN + 候选物品
+
+  - 用户塔看不到候选物品，不能把 注意力机制 用在用户塔
+
+### SIM 模型
+
+SIM 模型的主要目的是保留用户的长期兴趣。
+
+DIN 模型 
+
+- 计算用户 LastN 向量的加权平均
+- 权重是候选物品与 LastN 物品的相似度
+
+ DIN 模型的缺点 
+
+-  注意力层的计算量  正比于n（用户行为序列的长度） 
+-  只能记录最近几百个物品，否则计算量太大 
+-  缺点：关注短期兴趣，遗忘长期兴趣 
+
+如何改进 DIN？ 
+
+-  目标：保留用户长期行为序列（n  很大），而且计算量不会过大 
+
+ 改进 DIN： 
+
+- DIN 对 LastN 向量做加权平均，权重是相似度
+- 如果某 LastN 物品与候选物品差异很大，则权重接近零
+- 快速排除掉与候选物品无关的 LastN 物品，降低注意力层的计算量
+
+ SIM 模型 
+
+- 保留用户长期行为记录，n 的大小可以是几千
+- 对于每个候选物品，在用户 LastN 记录中做快速查找，找到 k 个相似物品
+- 把 LastN 变成 TopK，然后输入到注意力层
+- SIM 模型减小计算量（从 n 降到 k)
+
+#### 第一步：查找
+
+ 方法一：Hard Search —— 根据规则做筛选 
+
+- 根据候选物品的类目，保留 LastN 物品中类目相同的
+- 简单，快速，无需训练
+
+ 方法二：Soft Search 
+
+- 把物品做 embedding，变成向量
+- 把候选物品向量作为 query，做 k 近邻查找，保留 LastN 物品中最接近的 k 个
+- 效果更好，编程实现更复杂
+
+### 第二步：注意力机制
+
+Trick：使用时间信息
+
+-  用户与某个 LastN 物品的交互时刻距今为 $\delta$) 
+-  对  $\delta$  做离散化，再做 embedding，变成向量 d 
+  - 例如把时间离散为 1 天内、7 天内、30 天内、一年、一年以上
+
+* 把两个向量做 concatenation，表征一个 LastN 物品 
+
+  - 向量 x 是物品 embedding
+
+  - 向量 d 是时间的 embedding
+
+![img](https://cdn.nlark.com/yuque/0/2023/png/101969/1679753955426-9166c613-f76d-40ee-a719-6a6b33ef8aa3.png?x-oss-process=image%2Fformat%2Cwebp)
+
+为什么 SIM 使用时间信息？
+
+- DIN 的序列短，记录用户近期行为
+- SIM 的序列长，记录用户长期行为
+- 时间越久远，重要性越低
+
+### 结论
+
+- 长序列（长期兴趣）优于短序列（近期兴趣）
+- 注意力机制优于简单平均
+- Soft search 还是 hard search？取决于工程基建
+- 使用时间信息有提升
+
+# 重排
+
+### 物品相似性的度量
+
+ 相似性的度量 
+
+-  基于物品属性标签 
+
+- 类目、品牌、关键词......
+
+ 基于物品向量表征 
+
+- 用召回的双塔模型学到的物品向量（不好）
+- 基于内容的向量表征（好）
+
+推荐系统的头部效应明显，新物品 和 长尾物品 的曝光少
+
+双塔模型学不好 新物品 和 长尾物品 的向量表征
+
+![img](https://cdn.nlark.com/yuque/0/2023/png/101969/1679754066718-09f70bc6-2151-4d03-86f1-5a065add087b.png?x-oss-process=image%2Fformat%2Cwebp)
+
+基于图文内容的物品向量表征 （也就是如何训练CNN？使用CLIP）
+
+- CLIP 是当前公认最有效的预训练方法
+- 思想： 对于 图片—文本 二元组，预测图文是否匹配
+- 优势：无需人工标注。小红书的笔记天然包含图片 + 文字，大部分笔记图文相关
+- 做预训练时：同一篇笔记的 图文 作为正样本，它们的向量应该高度相似；来自不同笔记的图文作为负样本
+
+![img](https://cdn.nlark.com/yuque/0/2023/png/101969/1679754066807-15c268fd-09ec-4afc-b081-ea6728467d73.png?x-oss-process=image%2Fformat%2Cwebp)
+
+有m个正样本， m*(m-1)个负样本
+
+### 提升多样性的方法
+
+![img](https://cdn.nlark.com/yuque/0/2023/png/101969/1679754066976-44a4f018-770b-40de-ac4c-dd48edc645fc.png?x-oss-process=image%2Fformat%2Cwebp)
+
+- 粗排和精排用多目标模型对物品做 pointwise 打分，就打分，不考虑物品间的关联
+
+-  对于物品 i，模型输出点击率、交互率的预估，融合成分数 reward_i 
+-  reward_i 表示用户对物品 i 的兴趣，即物品本身价值 
+
+粗排 i 几千，精排 i 几百
+
+后处理主要作用：集成多样性？
+
+给定 n 个候选物品，排序模型打分 reward_1 ...reward_n,
+
+后处理：从n 个候选物品中选出 k 个，既要它们的总分高，也需要它们有**多样性** 
+
+- **精排的后处理通常被称为 —— 重排**
+- 增加多样性可以显著提升推荐系统指标（尤其是时长、留存率）
+
+![img](https://cdn.nlark.com/yuque/0/2023/png/101969/1679754067055-55ab8a34-c5c2-4613-a5ec-62e6ffcebb4c.png?x-oss-process=image%2Fformat%2Cwebp)
+
+### Maximal Marginal Relevance (MMR)
+
+融合之后的分数reward_i (精排分数)
+
+相关性 sim(i,j) 多样性分数
+
+![img](https://cdn.nlark.com/yuque/0/2023/png/101969/1679754067141-aa21565e-bec1-4636-a425-e80394d05489.png?x-oss-process=image%2Fformat%2Cwebp)
+
+Marginal Relevance 分数： 
+$$
+\mathrm{MR}_i=\theta \cdot \operatorname{reward}_i-(1-\theta) \cdot \max _{j \in \mathcal{S}} \operatorname{sim}(i, j)
+$$
+Maximal Marginal Relevance (MMR)：$argmax_{i<R}MR_i$
+
+![](./asset/MMR1.png)
+
+- 缺点：已选中的物品越多（即集合 S 越大），越难找出物品 i in R，使得 i 与 S 中的物品都不相似
+- 集合S越大，可供选择/已选择的物品j越多，我们的目标是最大化MMR，就要使sim(i,j)尽量小，但由于物品j的数量很多，很容易就能选到和i相似度大的物品，不利于最大化MMR
+
+### 滑动窗口
+
+解决方案：设置一个滑动窗口 W ，比如最近选中的 10 个物品，用 W 代替 MMR 公式中的 S
+
+![img](https://cdn.nlark.com/yuque/0/2023/png/101969/1679754067221-bc6baec6-351d-4769-82f4-fbf8a7fea842.png?x-oss-process=image%2Fformat%2Cwebp)
+$$
+\begin{aligned}
+& \operatorname{argmax}_{i \in \mathcal{R}}\left\{\theta \cdot \operatorname{reward}_i-(1-\theta) \cdot \max _{j \in \mathcal{S}} \operatorname{sim}(i, j)\right\} \\
+& \operatorname{argmax}_{i \in \mathcal{R}}\left\{\theta \cdot \operatorname{reward}_i-(1-\theta) \cdot \max _{j \in \mathcal{W}} \operatorname{sim}(i, j)\right\}
+\end{aligned}
+$$
+
+- 用滑动窗口的可解释性：给用户曝光的连续物品应该不相似，但没必要最新的物品和 30 个之前的物品还不相似
+
+### 总结
+
+- MMR 使用在精排的后处理（重排）阶段
+- 根据精排分数和多样性分数给候选物品排序
+- MMR 决定了物品的最终曝光顺序
+- 实际应用中通常带滑动窗口，这样比标准 MMR 效果更好
+
+### 重排的规则
+
+- 工业界的推荐系统一般有很多业务规则，这些规则通常是为了保护用户体验，做重排时这些规则必须被满足
+- 下面举例重排中的部分规则，以及这些规则与 MMR 相结合
+- 规则的优先级高于多样性算法
+
+#### MMR + 重排规则
+
+- 重排结合 MMR 与规则，在满足规则的前提下最大化 MR
+- 每一轮先用规则排除掉 R  中的部分物品，得到子集 R' 
+- MMR 公式中的 R 替换成子集 R'，选中的物品符合规则
+
+### DPP：数学基础 DPP 是目前推荐系统重排多样性公认的最好方法 
+
+超平形体 数学定义 
+$$
+\mathcal{P}\left(v_1, \cdots, v_k\right)=\left\{\alpha_1 v_1+\cdots+\alpha_k v_k \mid 0 \leq \alpha_1, \cdots, \alpha_k \leq 1\right\}
+$$
+v1, v2, ...  vk 必须线性无关
+
+
+
+- 如果 v1, v2, ...  vk 两两正交（多样性好），则体积最大化，vol=1
+- 如果 v1, v2, ...  vk 线性相关（多样性差），则体积最小化，vol=0
+
+![img](https://cdn.nlark.com/yuque/0/2023/png/101969/1679754068061-d5bd2975-c0bd-49d8-8deb-e21eaffe4d03.png)
+
+行列式与体积满足 $det(V^TV)=vol(P(v1,v2...vk))^2$
+
+- 即行列式和体积是等价的
+- 因此，可以用行列式 $det(V^TV)$ 衡量 $v1,v2...vk$ 多样性
+
+### 多样性
+
+n 个物品中选出 k 个物品，组成集合 S
+
+* 价值大：分数之和 $\Sigma reward_j$ 越大越好
+* 多样性好：S中k个向量组成的超平形体 P(S)的体积越大越好
+
+### 行列式点过程（DPP）
+
+DPP 是一种传统的统计机器学习方法
+$$
+\operatorname{argmax}_{\mathcal{S}:|\mathcal{S}|=k} \log \operatorname{det}\left(V_{\mathcal{S}}^T V_{\mathcal{S}}\right)
+$$
+
+- 从集合 S 中选出 k 个
+- 该公式严格来说叫 k-DPP
+
+Hulu：
+$$
+\arg \max _{\mathcal{S}:|\mathcal{S}|=k} \theta \cdot\left(\sum_{j \in \mathcal{S}} \operatorname{rreward}_j\right)+(1-\theta) \cdot \log \operatorname{det}\left(V_{\mathcal{S}}^T V_{\mathcal{S}}\right) .
+$$
+
+- 前半部分计算集合中物品的价值
+- 后半部分是行列式的对数，物品多样性越好，这部分越大
+- Hulu 论文的主要贡献不是提出该公式，而是快速求解该公式
+
+设 $A$ 为 $n \times n$ 的矩阵，它的 $(i, j)$ 元素为 $a_{i j}=v_i^T v_j$
+
+给定向量 $v_1, \cdots, v_n \in \mathbb{R}^d$ ，需要 $O\left(n^2 d\right)$ 时间计算 A 
+
+$A \mathcal{S}=V \mathcal{S}^T, V_{\mathcal{S}}$ 为 $A$ 的一个 $k \times k$ 子矩阵。如果 $i, j \in \mathcal{S}$ ，则 $a_{i j}$ 是 $A_{\mathcal{S}}$ 的一个元素
+
+DPP是一个组合优化的问题，从集合 {1,..n}中选出一个大小为k的子集s，精确 DPP 是不可能的，因为它是个 NP-hard 问题
+
+### 贪心算法求解
+
+$$
+\operatorname{argmax}_{i \in \mathcal{R}} \theta \cdot \operatorname{reward}_i+(1-\theta) \cdot \log \operatorname{det}\left(A_{\mathcal{S} \cup\{i\}}\right)
+$$
+
+每一轮选择一个物品i，S已选中，R未选中，要求有较高reward，同时不能和选中物品相似
+
+### 求解
+
+Cholesky分解As=LL^T
+
+初始时 $\mathcal{S}$ 中只有一个物品，$A_{\mathcal{S}}$ 是 $1 \times 1$ 的矩阵
+
+每一轮循环，基于上一轮算出的 $A_{\mathcal{S}}=L L^T$ ，快速求出 $A_{\mathcal{S} \cup\{i\}}$ 的 Cholesky 分解 $(\forall i \in \mathcal{R})$ ，从而求出 $\log \operatorname{det}\left(A_{\mathcal{S} \cup\{i\}}\right)$
+
+### 滑动窗口
+
+- 随着集合 S 增大，其中相似物品越来越多，物品向量会趋近线性相关
+- 导致行列式 det(As) 会坍缩到零，对数趋于负无穷
+
+![img](https://cdn.nlark.com/yuque/0/2023/png/101969/1679754068398-9bd1ec46-bec2-4c7e-a78f-0b6883c693f1.png?x-oss-process=image%2Fformat%2Cwebp)
+
+贪心算法每轮从 $\mathcal{R}$ 中选出一个物品：$\quad \operatorname{argmax}_{i \in \mathcal{R}} \theta \cdot \operatorname{reward}_i+(1-\theta) \cdot \log \operatorname{det}\left(A_{\mathcal{W} \cup\{i\}}\right)$
+
+有很多规则约束，例如最多连续出 5 篇视频笔记（如果已经连续出了 5 篇视频笔记，下一篇必须是图文笔记）
+
+用规则排除掉 $\mathcal{R}$ 中的部分物品，得到子集 $\mathcal{R}^{\prime}$ ，然后求解： $\operatorname{argmax}_{\mathrm{i} \in \mathcal{R}^{\prime}} \theta \cdot \operatorname{reward}_i+(1-\theta) \cdot \log \operatorname{det}\left(A_{\mathcal{W} \cup\{i\}}\right)$
 
 # 损失函数
 
